@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Motion Reader — Real-time Motion Detection &amp; Pose Tracking</title>
+  <meta name="description" content="Motion Reader: Real-time human movement detection, skeletal tracking, and event logging application.">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- MediaPipe dependencies (deferred to prevent blocking page loading) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <!-- App Container -->
+  <div class="app-layout">
+    
+    <!-- Top Header -->
+    <header class="top-header" id="headerBar">
+      <div class="header-left">
+        <div class="logo-box">
+          <svg class="app-logo" viewBox="0 0 40 40" width="34" height="34" fill="none">
+            <!-- Speed streaks -->
+            <path d="M4 12 H14 M2 20 H12 M6 28 H16" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round"/>
+            <!-- Head -->
+            <circle cx="26" cy="7" r="4.5" fill="#0088ff"/>
+            <!-- Runner Body -->
+            <path d="M26 14 L21 24 L27 28 L35 26" stroke="#0088ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M21 24 L15 29 L18 36" stroke="#0088ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M24 16 L17 17 L19 11" stroke="#0088ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M24 16 L31 19" stroke="#0088ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="title-container">
+          <h1 class="app-title">Motion <span class="accent-title">Reader</span></h1>
+          <span class="app-subtitle">Real-time Motion Detection &amp; Pose Tracking</span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <button class="header-btn" id="btnSettings" title="Settings">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          Settings
+        </button>
+        <div class="header-divider"></div>
+        <button class="header-btn" id="btnHelp" title="Help">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+          Help
+        </button>
+        <div class="window-controls">
+          <button class="win-btn" title="Minimize">&#9472;</button>
+          <button class="win-btn" title="Maximize">&#9633;</button>
+          <button class="win-btn win-close" title="Close">&#10005;</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace (Sidebar + Panels) -->
+    <div class="main-body">
+      <!-- Left Sidebar: Only 1 navigation item (Live View) -->
+      <aside class="left-sidebar" id="sidebar">
+        <button class="nav-item active" id="navLiveView">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <rect x="2" y="6" width="14" height="12" rx="2"></rect>
+            <polygon points="17,10 22,6 22,18 17,14"></polygon>
+          </svg>
+          <span>Live View</span>
+        </button>
+      </aside>
+
+      <!-- Content Workspace -->
+      <main class="content-workspace">
+        <!-- Left Panel: Camera Feed -->
+        <section class="panel-card camera-panel" id="cameraPanel">
+          <div class="panel-header">
+            <div class="panel-title-box">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="#0088ff">
+                <rect x="2" y="6" width="14" height="12" rx="2"></rect>
+                <polygon points="17,10 22,6 22,18 17,14"></polygon>
+              </svg>
+              <h2>Camera Feed</h2>
+            </div>
+          </div>
+
+          <!-- Video Viewport Container -->
+          <div class="video-container" id="videoContainer">
+            <!-- Canvas where video + pose skeleton are rendered -->
+            <canvas id="outputCanvas" width="1280" height="720"></canvas>
+
+            <!-- Corner Tracking Brackets -->
+            <div class="corner-bracket corner-tl"></div>
+            <div class="corner-bracket corner-tr"></div>
+            <div class="corner-bracket corner-bl"></div>
+            <div class="corner-bracket corner-br"></div>
+
+            <!-- Top-Left Performance Badge -->
+            <div class="status-badge" id="statusBadge">
+              <span class="live-dot" id="liveDot"></span>
+              <span class="badge-status" id="badgeStatus">LIVE</span>
+              <span class="badge-divider">|</span>
+              <span class="badge-fps" id="badgeFps">FPS: 30</span>
+              <span class="badge-divider">|</span>
+              <span class="badge-res" id="badgeRes">1280 × 720</span>
+            </div>
+
+            <!-- Empty / Loading State Message -->
+            <div class="video-placeholder" id="videoPlaceholder" style="display: none;">
+              <p>Camera Initializing...</p>
+            </div>
+
+            <!-- Camera Error / Fallback Overlay -->
+            <div class="camera-error-overlay" id="cameraErrorOverlay" style="display: none;">
+              <div class="overlay-icon">
+                <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                  <path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3m3-3h6l2 3h4a2 2 0 0 1 2 2v9.34m-7.72-2.06a4 4 0 1 1-5.56-5.56"></path>
+                </svg>
+              </div>
+              <h3 class="overlay-title">Camera Stream Unavailable</h3>
+              <p class="overlay-desc" id="overlayDescText">Webcam device is currently locked or in use by another application.</p>
+              <div class="overlay-actions">
+                <button class="btn-overlay btn-retry" id="btnOverlayRetry">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                  </svg>
+                  Retry Camera
+                </button>
+                <button class="btn-overlay btn-demo" id="btnOverlayDemo">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  Load Demo Video
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Video Playback Controls (File Mode Only) -->
+          <div class="video-playback-bar" id="videoPlaybackBar" style="display: none;">
+            <button class="btn-ctrl" id="btnFilePlayPause">Pause</button>
+            <button class="btn-ctrl" id="btnFileRestart">Restart</button>
+            <input type="range" class="seek-slider" id="seekSlider" min="0" max="1000" value="0">
+            <span class="time-label" id="timeLabel">00:00 / 00:00</span>
+          </div>
+
+          <!-- Source Selection Cards -->
+          <div class="source-selection-row">
+            <!-- Live Camera Button -->
+            <button class="source-card active" id="btnSelectLive">
+              <div class="source-icon-box">
+                <svg viewBox="0 0 24 24" width="26" height="26" fill="#0088ff">
+                  <rect x="2" y="6" width="14" height="12" rx="2"></rect>
+                  <polygon points="17,10 22,6 22,18 17,14"></polygon>
+                </svg>
+              </div>
+              <div class="source-text">
+                <span class="source-title">Live Camera</span>
+                <span class="source-desc">Use your webcam for real-time analysis</span>
+              </div>
+            </button>
+
+            <!-- Upload Video Button -->
+            <button class="source-card" id="btnSelectUpload">
+              <div class="source-icon-box">
+                <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="#94a3b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="15" x2="12" y2="4"></line>
+                  <polyline points="7,9 12,4 17,9"></polyline>
+                  <path d="M20 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2"></path>
+                </svg>
+              </div>
+              <div class="source-text">
+                <span class="source-title">Upload Video</span>
+                <span class="source-desc">Analyze a video file</span>
+              </div>
+            </button>
+          </div>
+        </section>
+
+        <!-- Right Panel: Motion Terminal -->
+        <section class="panel-card terminal-panel" id="terminalPanel">
+          <div class="panel-header">
+            <div class="panel-title-box">
+              <div class="terminal-icon-box">
+                <span>&gt;_</span>
+              </div>
+              <h2>Motion Terminal</h2>
+            </div>
+            <button class="btn-clear" id="btnClearTerminal">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                <line x1="10" y1="11" x2="10" y2="17"></line>
+                <line x1="14" y1="11" x2="14" y2="17"></line>
+              </svg>
+              Clear
+            </button>
+          </div>
+
+          <!-- Terminal Output Log Area -->
+          <div class="terminal-body" id="terminalLogBody">
+            <!-- Dynamically populated lines -->
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- Bottom Control Bar -->
+    <footer class="bottom-bar" id="bottomBar">
+      <!-- Camera Selection Dropdown -->
+      <div class="camera-select-box">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="#94a3b8">
+          <rect x="2" y="6" width="14" height="12" rx="2"></rect>
+          <polygon points="17,10 22,6 22,18 17,14"></polygon>
+        </svg>
+        <select class="camera-select" id="cameraSelect">
+          <option value="default">Camera (Default)</option>
+        </select>
+        <svg class="dropdown-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#94a3b8" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </div>
+
+      <!-- Main Action Stop/Start Button -->
+      <button class="btn-main-action stop-state" id="btnMainAction" title="Stop / Start Analysis">
+        <span class="action-icon" id="actionIcon"></span>
+      </button>
+
+      <!-- Tracking Status Indicator -->
+      <div class="tracking-status" id="trackingStatus">
+        <span class="status-dot-indicator dot-active" id="statusDot"></span>
+        <span class="status-text" id="statusText">Tracking...</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Settings Modal Dialog -->
+  <div class="modal-backdrop" id="settingsModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Application Settings</h3>
+        <button class="modal-close-btn" id="btnCloseSettings">&times;</button>
+      </div>
+      <div class="modal-tabs">
+        <button class="tab-btn active" data-tab="tabVideo">Video</button>
+        <button class="tab-btn" data-tab="tabDetection">Detection</button>
+        <button class="tab-btn" data-tab="tabDisplay">Display</button>
+        <button class="tab-btn" data-tab="tabTerminal">Terminal</button>
+      </div>
+      <div class="modal-content">
+        <!-- Tab 1: Video -->
+        <div class="tab-pane active" id="tabVideo">
+          <label>Preferred Camera Resolution:</label>
+          <select id="prefResSelect" class="form-input">
+            <option value="1280x720">1280 × 720 (Recommended HD)</option>
+            <option value="1920x1080">1920 × 1080 (Full HD)</option>
+            <option value="640x480">640 × 480 (High Performance)</option>
+          </select>
+          <div class="form-check">
+            <input type="checkbox" id="chkMirror" checked>
+            <label for="chkMirror">Mirror live camera preview (selfie mode)</label>
+          </div>
+        </div>
+        <!-- Tab 2: Detection -->
+        <div class="tab-pane" id="tabDetection">
+          <div class="slider-group">
+            <div class="slider-label-row">
+              <span>Min Pose Detection Confidence:</span>
+              <span id="valDetConf">0.50</span>
+            </div>
+            <input type="range" id="sliderDetConf" min="20" max="90" value="50">
+          </div>
+          <div class="slider-group">
+            <div class="slider-label-row">
+              <span>Action Sensitivity:</span>
+              <span id="valSensitivity">1.0x</span>
+            </div>
+            <input type="range" id="sliderSensitivity" min="5" max="20" value="10">
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="chkSmoothing" checked>
+            <label for="chkSmoothing">Enable landmark temporal smoothing (EMA filter)</label>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="chkGestures" checked>
+            <label for="chkGestures">Enable gesture recognition (waving, arm raises)</label>
+          </div>
+        </div>
+        <!-- Tab 3: Display -->
+        <div class="tab-pane" id="tabDisplay">
+          <div class="form-check">
+            <input type="checkbox" id="chkShowSkeleton" checked>
+            <label for="chkShowSkeleton">Show skeletal segment connections (bones)</label>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="chkShowLandmarks" checked>
+            <label for="chkShowLandmarks">Show circular landmark joint nodes</label>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="chkShowHands" checked>
+            <label for="chkShowHands">Show detailed 21-point hand tracking</label>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="chkShowFace" checked>
+            <label for="chkShowFace">Show facial mesh / contour</label>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="chkShowFps" checked>
+            <label for="chkShowFps">Show performance &amp; status badge</label>
+          </div>
+          <div class="form-check">
+            <input type="checkbox" id="chkShowCorners" checked>
+            <label for="chkShowCorners">Show corner tracking brackets</label>
+          </div>
+        </div>
+        <!-- Tab 4: Terminal -->
+        <div class="tab-pane" id="tabTerminal">
+          <div class="form-check">
+            <input type="checkbox" id="chkAutoScroll" checked>
+            <label for="chkAutoScroll">Auto-scroll to latest recognized event</label>
+          </div>
+          <div class="export-box">
+            <label>Export Movement Event Logs:</label>
+            <div class="btn-group">
+              <button class="btn-secondary" id="btnExportCsv">Export as CSV</button>
+              <button class="btn-secondary" id="btnExportJson">Export as JSON</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btnResetSettings">Reset to Defaults</button>
+        <button class="btn-primary" id="btnSaveSettings">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Help Modal Dialog -->
+  <div class="modal-backdrop" id="helpModal" style="display: none;">
+    <div class="modal-card help-card">
+      <div class="modal-header">
+        <h3>Help &amp; Documentation</h3>
+        <button class="modal-close-btn" id="btnCloseHelp">&times;</button>
+      </div>
+      <div class="modal-content help-content">
+        <h4 class="help-heading">1. System Overview</h4>
+        <p><b>Motion Reader</b> is a real-time computer vision system that tracks human movement, classifies postures, identifies gestures, and streams timestamped actions directly into the Motion Terminal.</p>
+
+        <h4 class="help-heading">2. Source Selection</h4>
+        <ul>
+          <li><b>Live Camera:</b> Select the "Live Camera" card or use the bottom camera selector dropdown. Automatically requests browser webcam permission.</li>
+          <li><b>Upload Video:</b> Select the "Upload Video" card to load an MP4, MOV, AVI, or WebM video file. When in video mode, seek bar, play/pause, and restart controls appear automatically.</li>
+        </ul>
+
+        <h4 class="help-heading">3. Skeletal Tracking Overlay</h4>
+        <ul>
+          <li><b>Bones:</b> Electric-blue lines indicate anatomical skeletal links between joints.</li>
+          <li><b>Joints:</b> Two-tone circular markers represent detected landmarks (shoulders, elbows, wrists, hips, knees, ankles).</li>
+          <li><b>Hands:</b> Detailed 21-point hand skeleton and finger joints are tracked when visible.</li>
+        </ul>
+
+        <h4 class="help-heading">4. Recognized Movement Events</h4>
+        <table class="help-table">
+          <thead>
+            <tr><th>Category</th><th>Terminal Color</th><th>Supported Movements</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><b>Person Detection</b></td><td style="color:#22c55e;">Green</td><td>Person detected (ID: 1)</td></tr>
+            <tr><td><b>Neutral Posture</b></td><td style="color:#f8fafc;">White</td><td>Standing, Sitting, Crouching</td></tr>
+            <tr><td><b>Hand Movements</b></td><td style="color:#38bdf8;">Cyan</td><td>Right hand raised, Right hand lowered, Left hand raised, Left hand lowered, Both hands raised</td></tr>
+            <tr><td><b>Recognized Gestures</b></td><td style="color:#facc15;">Yellow</td><td>Waving (temporal oscillatory analysis with confidence score)</td></tr>
+            <tr><td><b>Body Movements</b></td><td style="color:#c084fc;">Purple</td><td>Stepping forward, Stepping backward, Turning right, Turning left, Leaning right, Leaning left</td></tr>
+            <tr><td><b>System Messages</b></td><td style="color:#94a3b8;">Gray</td><td>Device status, resolution, video playback progress</td></tr>
+          </tbody>
+        </table>
+
+        <h4 class="help-heading">5. Duplicate Suppression</h4>
+        <p>The system uses stateful hysteresis and temporal sliding windows to prevent spamming duplicate events. Sustained postures (like Standing) only log when transitioning into or out of that posture.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="btnDismissHelp">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden HTML5 Media Elements for Hardware Video Capture -->
+  <input type="file" id="fileInput" accept="video/*" style="display: none;">
+  <video id="webcamVideo" playsinline autoplay muted class="hidden-capture-video"></video>
+  <video id="fileVideo" playsinline class="hidden-capture-video"></video>
+
+  <!-- Application Logic -->
+  <script src="app.js?v=5"></script>
+</body>
+</html>
