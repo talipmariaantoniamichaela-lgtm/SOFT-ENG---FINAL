@@ -5,6 +5,7 @@ with landmark smoothing and coordinate normalization.
 """
 import sys
 import os
+import math
 import cv2
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
@@ -52,6 +53,15 @@ class TrackingResult:
     face_landmarks: Optional[List[NormalizedLandmark]] = None
     bounding_box: Optional[Tuple[float, float, float, float]] = None  # (min_x, min_y, max_x, max_y)
     timestamp_ms: int = 0
+    image_size: Tuple[int, int] = (1, 1)  # (width, height) of the source frame, for aspect-correct geometry
+
+
+def compute_bounding_box(landmarks: List[NormalizedLandmark], min_visibility: float = 0.4) -> Optional[Tuple[float, float, float, float]]:
+    xs = [lm.x for lm in landmarks if lm.visibility > min_visibility]
+    ys = [lm.y for lm in landmarks if lm.visibility > min_visibility]
+    if not xs or not ys:
+        return None
+    return (max(0.0, min(xs)), max(0.0, min(ys)), min(1.0, max(xs)), min(1.0, max(ys)))
 
 
 # Key landmark indices in MediaPipe Pose
@@ -177,13 +187,15 @@ class PoseEstimator:
         enable_hands: bool = True,
         enable_face: bool = True,
         smoothing: bool = True,
-        smoothing_factor: float = 0.55
+        smoothing_factor: float = 0.55,
+        num_poses: int = 5
     ):
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence
         self.enable_hands = enable_hands
         self.enable_face = enable_face
         self.smoothing = smoothing
+        self.num_poses = max(1, num_poses)
 
         self.smoother = LandmarkSmoother(alpha=smoothing_factor)
         self.pose_detector = None
@@ -199,6 +211,7 @@ class PoseEstimator:
                 base_options = python.BaseOptions(model_asset_path=POSE_MODEL_PATH)
                 options = vision.PoseLandmarkerOptions(
                     base_options=base_options,
+                    num_poses=self.num_poses,
                     min_pose_detection_confidence=self.min_detection_confidence,
                     min_tracking_confidence=self.min_tracking_confidence,
                     output_segmentation_masks=False,
@@ -215,7 +228,7 @@ class PoseEstimator:
                 base_options = python.BaseOptions(model_asset_path=HAND_MODEL_PATH)
                 options = vision.HandLandmarkerOptions(
                     base_options=base_options,
-                    num_hands=2,
+                    num_hands=2 * self.num_poses,
                     min_hand_detection_confidence=self.min_detection_confidence,
                     min_tracking_confidence=self.min_tracking_confidence,
                     running_mode=vision.RunningMode.IMAGE
@@ -229,6 +242,7 @@ class PoseEstimator:
                 base_options = python.BaseOptions(model_asset_path=FACE_MODEL_PATH)
                 options = vision.FaceLandmarkerOptions(
                     base_options=base_options,
+                    num_faces=self.num_poses,
                     min_face_detection_confidence=self.min_detection_confidence,
                     min_tracking_confidence=self.min_tracking_confidence,
                     running_mode=vision.RunningMode.IMAGE
@@ -243,84 +257,100 @@ class PoseEstimator:
 
     def estimate(self, rgb_frame: np.ndarray, timestamp_ms: int = 0) -> TrackingResult:
         """
-        Runs full pose estimation pipeline on the given RGB frame.
+        Single-person convenience wrapper: returns the most prominent person,
+        smoothed with this estimator's own smoother.
         """
-        result = TrackingResult(timestamp_ms=timestamp_ms)
+        people = self.estimate_all(rgb_frame, timestamp_ms)
+        if not people:
+            self.smoother.reset()
+            return TrackingResult(timestamp_ms=timestamp_ms)
+        result = people[0]
+        if self.smoothing:
+            result.pose_landmarks = self.smoother.smooth(result.pose_landmarks)
+            result.bounding_box = compute_bounding_box(result.pose_landmarks)
+        return result
+
+    def estimate_all(self, rgb_frame: np.ndarray, timestamp_ms: int = 0) -> List[TrackingResult]:
+        """
+        Runs pose estimation for every person in the RGB frame (up to num_poses).
+        Hands and face meshes are assigned to the person whose wrist / nose is closest.
+        Results are unsmoothed and sorted largest-first; smoothing is done per tracked person.
+        """
         if self.pose_detector is None or rgb_frame is None:
-            return result
+            return []
 
         h, w, _ = rgb_frame.shape
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
         # 1. Pose Landmark Detection
+        people: List[TrackingResult] = []
         try:
             pose_result = self.pose_detector.detect(mp_image)
-            if pose_result and pose_result.pose_landmarks and len(pose_result.pose_landmarks) > 0:
-                raw_landmarks = []
-                for lm in pose_result.pose_landmarks[0]:
-                    raw_landmarks.append(NormalizedLandmark(
-                        x=lm.x,
-                        y=lm.y,
-                        z=lm.z,
+            for pose in (pose_result.pose_landmarks or []):
+                lms = [
+                    NormalizedLandmark(
+                        x=lm.x, y=lm.y, z=lm.z,
                         visibility=getattr(lm, "visibility", 1.0) or 1.0,
                         presence=getattr(lm, "presence", 1.0) or 1.0
-                    ))
-
-                # Apply smoothing
-                if self.smoothing:
-                    smoothed_landmarks = self.smoother.smooth(raw_landmarks)
-                else:
-                    smoothed_landmarks = raw_landmarks
-
-                result.person_detected = True
-                result.person_id = 1
-                result.pose_landmarks = smoothed_landmarks
-
-                # Compute bounding box
-                xs = [lm.x for lm in smoothed_landmarks if lm.visibility > 0.4]
-                ys = [lm.y for lm in smoothed_landmarks if lm.visibility > 0.4]
-                if xs and ys:
-                    result.bounding_box = (max(0.0, min(xs)), max(0.0, min(ys)), min(1.0, max(xs)), min(1.0, max(ys)))
-            else:
-                self.smoother.reset()
-                result.person_detected = False
+                    )
+                    for lm in pose
+                ]
+                bbox = compute_bounding_box(lms)
+                if bbox is None:
+                    continue
+                people.append(TrackingResult(
+                    person_detected=True,
+                    pose_landmarks=lms,
+                    bounding_box=bbox,
+                    timestamp_ms=timestamp_ms,
+                    image_size=(w, h),
+                ))
         except Exception as e:
             print(f"Pose detection error: {e}")
-            result.person_detected = False
+            return []
 
-        # If no person was detected, skip hand/face
-        if not result.person_detected:
-            return result
+        if not people:
+            return []
+        people.sort(key=lambda p: (p.bounding_box[2] - p.bounding_box[0]) * (p.bounding_box[3] - p.bounding_box[1]), reverse=True)
 
-        # 2. Hand Landmark Detection (if enabled)
-        if self.hand_detector is not None:
+        # 2. Hand Landmark Detection (if enabled), assigned to the nearest pose wrist
+        if self.enable_hands and self.hand_detector is not None:
             try:
                 hand_result = self.hand_detector.detect(mp_image)
-                if hand_result and hand_result.hand_landmarks:
-                    for idx, handedness in enumerate(hand_result.handedness):
-                        label = handedness[0].category_name  # "Left" or "Right"
-                        h_landmarks = [
-                            NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z)
-                            for lm in hand_result.hand_landmarks[idx]
-                        ]
-                        # MediaPipe handedness is mirrored with respect to user in selfie/camera
-                        if label == "Right":
-                            result.right_hand_landmarks = h_landmarks
+                for idx, hand in enumerate(hand_result.hand_landmarks or []):
+                    h_landmarks = [NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z) for lm in hand]
+                    wrist = h_landmarks[0]
+                    best, best_d, best_side = None, 0.12, None
+                    for person in people:
+                        for side, wi in (("left", LEFT_WRIST), ("right", RIGHT_WRIST)):
+                            pw = person.pose_landmarks[wi]
+                            d = math.hypot(pw.x - wrist.x, pw.y - wrist.y)
+                            if d < best_d:
+                                best, best_d, best_side = person, d, side
+                    if best is not None:
+                        if best_side == "right":
+                            best.right_hand_landmarks = h_landmarks
                         else:
-                            result.left_hand_landmarks = h_landmarks
-            except Exception as e:
+                            best.left_hand_landmarks = h_landmarks
+            except Exception:
                 pass
 
-        # 3. Face Landmark Detection (if enabled)
-        if self.face_detector is not None:
+        # 3. Face Landmark Detection (if enabled), assigned to the nearest pose nose
+        if self.enable_face and self.face_detector is not None:
             try:
                 face_result = self.face_detector.detect(mp_image)
-                if face_result and face_result.face_landmarks and len(face_result.face_landmarks) > 0:
-                    result.face_landmarks = [
-                        NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z)
-                        for lm in face_result.face_landmarks[0]
-                    ]
-            except Exception as e:
+                for face in (face_result.face_landmarks or []):
+                    f_landmarks = [NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z) for lm in face]
+                    tip = f_landmarks[1] if len(f_landmarks) > 1 else f_landmarks[0]
+                    best, best_d = None, 0.10
+                    for person in people:
+                        pn = person.pose_landmarks[NOSE]
+                        d = math.hypot(pn.x - tip.x, pn.y - tip.y)
+                        if d < best_d and person.face_landmarks is None:
+                            best, best_d = person, d
+                    if best is not None:
+                        best.face_landmarks = f_landmarks
+            except Exception:
                 pass
 
-        return result
+        return people

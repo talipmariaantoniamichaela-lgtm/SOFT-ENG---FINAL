@@ -147,6 +147,31 @@ A customized 4-stage convolutional neural network implemented in pure PyTorch (w
 
 ---
 
+### Live Identity Recognition (current pipeline)
+The desktop app now identifies people with pretrained face models rather than the small CNN above. A CNN trained from scratch on one photo burst per person mostly learns that burst's background and lighting, so it does not carry over to a webcam:
+
+1. **YuNet** (`face_detection_yunet_2023mar.onnx`) finds every face in the frame.
+2. **SFace** (`face_recognition_sface_2021dec.onnx`) turns each face into a 128-d embedding.
+3. The embedding is compared with `face_gallery.npz`, which holds embeddings of every usable dataset photo (plus mirrored, low-res and darker copies). A face below the calibrated similarity threshold is shown as **Unknown (ID n)**.
+4. Each face is attached to the pose skeleton whose head it covers. The name is decided by a vote over recent frames, and one name can belong to only one person at a time.
+
+Build or rebuild the gallery after adding photos or people (one folder per person):
+
+```powershell
+python enroll_faces.py                      # default dataset folder
+python enroll_faces.py --dataset D:\photos  # custom folder
+```
+
+### Multi-Person Action Detection
+Up to 5 people are tracked at once, each with their own ID, skeleton color and action label:
+- **Posture:** Standing, Sitting, Crouching, Lying down (left blank when the legs are out of view)
+- **Sustained:** Idle, Walking, Running, Arms crossed, Arms stretched out, Hands on head, Hands on hips, Touching face, Pointing left/right, Bending over
+- **Hands:** Left/right/both hands raised and lowered
+- **Gestures:** Waving, Clapping, Jumping, Nodding, Shaking head
+- **Body:** Leaning, Turning, Stepping forward/backward
+
+---
+
 ## 5. Installation and Setup
 
 ### Prerequisites

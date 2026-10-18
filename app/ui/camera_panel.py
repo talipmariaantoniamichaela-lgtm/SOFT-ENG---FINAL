@@ -21,9 +21,20 @@ from app.detection.pose_estimator import (
     LEFT_WRIST, RIGHT_WRIST, LEFT_HIP, RIGHT_HIP,
     LEFT_KNEE, RIGHT_KNEE, LEFT_ANKLE, RIGHT_ANKLE
 )
-from app.detection.motion_analyzer import FrameAnalysisResult
+from app.detection.person_tracker import PersonSnapshot
 from app.config import AppConfig
 from app.ui.icons import IconFactory
+
+
+# Distinct colors for recognized people; unknown people are drawn in the default blue
+_NAME_COLORS = ["#22d3ee", "#a3e635", "#f472b6", "#fbbf24", "#a78bfa", "#fb923c", "#34d399", "#f87171"]
+_UNKNOWN_COLOR = "#00d2ff"
+
+
+def person_color(person: PersonSnapshot) -> QColor:
+    if not person.name:
+        return QColor(_UNKNOWN_COLOR)
+    return QColor(_NAME_COLORS[sum(map(ord, person.name)) % len(_NAME_COLORS)])
 
 
 class VideoViewport(QWidget):
@@ -39,8 +50,7 @@ class VideoViewport(QWidget):
 
         # Current frame and tracking state
         self.current_image: Optional[QImage] = None
-        self.tracking_result: Optional[TrackingResult] = None
-        self.frame_analysis: Optional[FrameAnalysisResult] = None
+        self.people: List[PersonSnapshot] = []
         self.fps: float = 30.0
         self.resolution_str: str = "1280 × 720"
         self.source_label: str = "LIVE"
@@ -49,8 +59,7 @@ class VideoViewport(QWidget):
     def update_frame(
         self,
         rgb_data,
-        tracking_result: Optional[TrackingResult],
-        analysis: Optional[FrameAnalysisResult],
+        people: List[PersonSnapshot],
         fps: float,
         res_str: str,
         source_label: str = "LIVE",
@@ -60,8 +69,7 @@ class VideoViewport(QWidget):
         h, w, ch = rgb_data.shape
         bytes_per_line = ch * w
         self.current_image = QImage(rgb_data.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
-        self.tracking_result = tracking_result
-        self.frame_analysis = analysis
+        self.people = list(people or [])
         self.fps = fps
         self.resolution_str = res_str
         self.source_label = source_label
@@ -100,13 +108,12 @@ class VideoViewport(QWidget):
         painter.setClipPath(clip_path)
         painter.drawImage(video_rect, self.current_image)
 
-        # 3. Draw Skeletal Tracking Overlay
-        if self.tracking_result and self.tracking_result.person_detected:
-            self._draw_skeleton(painter, offset_x, offset_y, target_w, target_h)
-
-        # 4. Draw Subject Recognition Tag (if recognized)
-        if self.tracking_result and self.tracking_result.person_detected and self.frame_analysis and self.frame_analysis.subject_name:
-            self._draw_subject_tag(painter, offset_x, offset_y, target_w, target_h)
+        # 3. Skeleton, box and identity / action tag for every person
+        for person in self.people:
+            color = person_color(person)
+            self._draw_skeleton(painter, person.tracking, color, offset_x, offset_y, target_w, target_h)
+        for person in self.people:
+            self._draw_person_tag(painter, person, person_color(person), offset_x, offset_y, target_w, target_h)
 
         painter.restore()
 
@@ -118,44 +125,54 @@ class VideoViewport(QWidget):
         if self.config.display.show_fps_badge:
             self._draw_status_badge(painter, video_rect)
 
-    def _draw_subject_tag(self, painter: QPainter, ox: float, oy: float, tw: float, th: float) -> None:
-        """Draws recognized subject name and confidence pill above person bounding box."""
-        if not self.tracking_result or not self.tracking_result.bounding_box or not self.frame_analysis:
+    def _draw_person_tag(self, painter: QPainter, person: PersonSnapshot, color: QColor,
+                         ox: float, oy: float, tw: float, th: float) -> None:
+        """Draws the person's box, a name pill, and a line listing what they are doing."""
+        bbox = person.tracking.bounding_box
+        if not bbox:
             return
-        subj = self.frame_analysis.subject_name
-        conf = self.frame_analysis.subject_confidence or 0.0
-        if not subj:
-            return
+        min_x, min_y, max_x, max_y = bbox
+        bx, by = ox + min_x * tw, oy + min_y * th
+        bw, bh = (max_x - min_x) * tw, (max_y - min_y) * th
 
-        min_x, min_y, max_x, max_y = self.tracking_result.bounding_box
-        bx = ox + min_x * tw
-        by = oy + min_y * th
-        bw = (max_x - min_x) * tw
-        bh = (max_y - min_y) * th
-
-        # Draw sleek bounding box with glowing cyan accent
-        box_pen = QPen(QColor(0, 210, 255, 140), 1.5, Qt.DashLine)
-        painter.setPen(box_pen)
+        box_color = QColor(color)
+        box_color.setAlpha(150)
+        painter.setPen(QPen(box_color, 1.5, Qt.DashLine))
         painter.setBrush(Qt.NoBrush)
         painter.drawRoundedRect(QRectF(bx, by, bw, bh), 6.0, 6.0)
 
-        # Draw pill tag above bounding box
-        tag_text = f"● {subj} ({int(conf * 100)}%)"
-        font = QFont("Segoe UI", 9, QFont.Bold)
-        painter.setFont(font)
+        # Name pill
+        if person.name:
+            name_text = f"● {person.name}  {person.name_score:.2f}"
+        else:
+            name_text = f"● Unknown (ID {person.track_id})" if self.config.display.show_person_id else "● Unknown"
+        painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
         fm = painter.fontMetrics()
-        tag_w = fm.horizontalAdvance(tag_text) + 18.0
         tag_h = 24.0
+        tag_w = fm.horizontalAdvance(name_text) + 18.0
         tag_x = max(ox + 8.0, min(ox + tw - tag_w - 8.0, bx))
-        tag_y = max(oy + 8.0, by - tag_h - 4.0)
-
+        tag_y = max(oy + 8.0, by - tag_h - 26.0)
         pill_rect = QRectF(tag_x, tag_y, tag_w, tag_h)
-        painter.setPen(QPen(QColor("#00d2ff"), 1.2))
-        painter.setBrush(QBrush(QColor(11, 15, 25, 220)))
+        painter.setPen(QPen(color, 1.2))
+        painter.setBrush(QBrush(QColor(11, 15, 25, 225)))
         painter.drawRoundedRect(pill_rect, 12.0, 12.0)
+        painter.setPen(color)
+        painter.drawText(pill_rect, Qt.AlignCenter, name_text)
 
-        painter.setPen(QColor("#00d2ff"))
-        painter.drawText(pill_rect, Qt.AlignCenter, tag_text)
+        # Actions line under the name
+        labels = person.analysis.summary_labels() if person.analysis else []
+        if labels:
+            painter.setFont(QFont("Segoe UI", 8))
+            fm = painter.fontMetrics()
+            act_text = " · ".join(dict.fromkeys(labels))
+            act_text = fm.elidedText(act_text, Qt.ElideRight, int(max(160.0, min(tw * 0.6, 420.0))))
+            act_w = fm.horizontalAdvance(act_text) + 16.0
+            act_rect = QRectF(tag_x, tag_y + tag_h + 2.0, act_w, 20.0)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(11, 15, 25, 200)))
+            painter.drawRoundedRect(act_rect, 10.0, 10.0)
+            painter.setPen(QColor("#e2e8f0"))
+            painter.drawText(act_rect, Qt.AlignCenter, act_text)
 
     def _draw_corner_markers(self, painter: QPainter, rect: QRectF) -> None:
         """Draws subtle cyan/blue L-brackets at the four corners of the video frame."""
@@ -227,18 +244,18 @@ class VideoViewport(QWidget):
         metrics_str = f"|  {fps_txt}  |  {res_txt}"
         painter.drawText(QRectF(metrics_x, badge_y, badge_w - (metrics_x - badge_x), badge_h), Qt.AlignVCenter, metrics_str)
 
-    def _draw_skeleton(self, painter: QPainter, ox: float, oy: float, tw: float, th: float) -> None:
-        """Draws glowing electric-blue skeletal lines and circular joint nodes."""
-        lms = self.tracking_result.pose_landmarks
+    def _draw_skeleton(self, painter: QPainter, tracking: TrackingResult, color: QColor,
+                       ox: float, oy: float, tw: float, th: float) -> None:
+        """Draws glowing skeletal lines and circular joint nodes for one person."""
+        lms = tracking.pose_landmarks
         if not lms or len(lms) < 33:
             return
 
         def to_screen(lm: NormalizedLandmark) -> QPointF:
             return QPointF(ox + lm.x * tw, oy + lm.y * th)
 
-        # Colors matching reference UI
-        bone_color = QColor("#00d2ff")
-        joint_outer_color = QColor("#0088ff")
+        bone_color = QColor(color)
+        joint_outer_color = QColor(color).darker(130)
         joint_inner_color = QColor("#ffffff")
 
         # 1. Draw Bones (connected segments)
@@ -273,7 +290,7 @@ class VideoViewport(QWidget):
             if self.config.display.show_hands:
                 hand_pen = QPen(QColor("#38bdf8"), 2.0, Qt.SolidLine, Qt.RoundCap)
                 painter.setPen(hand_pen)
-                for hands in [self.tracking_result.left_hand_landmarks, self.tracking_result.right_hand_landmarks]:
+                for hands in [tracking.left_hand_landmarks, tracking.right_hand_landmarks]:
                     if hands and len(hands) == 21:
                         # Draw finger bones
                         for i1, i2 in HAND_CONNECTIONS:
@@ -288,11 +305,11 @@ class VideoViewport(QWidget):
                             painter.drawEllipse(pt, 1.8, 1.8)
 
             # 3. Draw Face Mesh / Features (if detected)
-            if self.config.display.show_face and self.tracking_result.face_landmarks:
-                face_pen = QPen(QColor("#00d2ff"), 1.2, Qt.SolidLine, Qt.RoundCap)
+            if self.config.display.show_face and tracking.face_landmarks:
+                face_pen = QPen(bone_color, 1.2, Qt.SolidLine, Qt.RoundCap)
                 painter.setPen(face_pen)
                 # Draw facial oval / jawline contour from key face landmarks
-                f_lms = self.tracking_result.face_landmarks
+                f_lms = tracking.face_landmarks
                 # Selected indices for clean face contour
                 oval_indices = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
                 if len(f_lms) > 400:

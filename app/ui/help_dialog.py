@@ -70,12 +70,12 @@ class HelpDialog(QDialog):
             <tr>
                 <td><b>Person Detection</b></td>
                 <td style="color: #22c55e;">Green</td>
-                <td>Person detected (ID: 1)</td>
+                <td>Maria detected, Person detected (ID: 2), Mark left the frame</td>
             </tr>
             <tr>
                 <td><b>Neutral Posture</b></td>
                 <td style="color: #ffffff;">White</td>
-                <td>Standing, Sitting, Crouching</td>
+                <td>Standing, Sitting, Crouching, Lying down, Idle</td>
             </tr>
             <tr>
                 <td><b>Hand Movements</b></td>
@@ -85,12 +85,12 @@ class HelpDialog(QDialog):
             <tr>
                 <td><b>Recognized Gestures</b></td>
                 <td style="color: #facc15;">Yellow</td>
-                <td>Waving (temporal oscillatory analysis with confidence score)</td>
+                <td>Waving, Clapping, Jumping, Nodding, Shaking head</td>
             </tr>
             <tr>
                 <td><b>Body Movements</b></td>
                 <td style="color: #c084fc;">Purple</td>
-                <td>Stepping forward, Stepping backward, Turning right, Turning left, Leaning right, Leaning left</td>
+                <td>Walking, Running, Stepping forward/backward, Turning left/right, Leaning left/right, Bending over, Arms crossed, Arms stretched out, Hands on head, Hands on hips, Touching face, Pointing left/right</td>
             </tr>
             <tr>
                 <td><b>System Messages</b></td>

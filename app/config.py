@@ -4,7 +4,7 @@ Configuration and Settings module for Motion Reader.
 import os
 import json
 from dataclasses import dataclass, asdict, field
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
 
@@ -28,6 +28,9 @@ class DetectionSettings:
     enable_gesture_recognition: bool = True
     enable_hand_tracking: bool = True
     enable_face_tracking: bool = True
+    max_people: int = 5
+    face_match_threshold: Optional[float] = None  # None = use the value stored by enroll_faces.py
+    face_match_margin: Optional[float] = None     # required lead over the 2nd most similar person
 
 
 @dataclass

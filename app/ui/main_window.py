@@ -253,12 +253,12 @@ class MainWindow(QMainWindow):
         cameras = CameraManager.enumerate_cameras()
         self.control_bar.populate_cameras(cameras)
 
-    def _on_frame_ready(self, rgb_frame, tracking_result, analysis, fps, res_str) -> None:
-        """Sends processed frame and tracking data to viewport."""
+    def _on_frame_ready(self, rgb_frame, people, fps, res_str) -> None:
+        """Sends processed frame and per-person tracking data to viewport."""
         source_lbl = "LIVE" if self.processor_thread.source_mode == SourceMode.LIVE_CAMERA else "FILE"
         is_p = self.processor_thread._is_paused
         self.camera_panel.viewport.update_frame(
-            rgb_frame, tracking_result, analysis, fps, res_str,
+            rgb_frame, people, fps, res_str,
             source_label=source_lbl, is_paused=is_p
         )
 
@@ -311,12 +311,8 @@ class MainWindow(QMainWindow):
     def _on_settings_applied(self, new_config: AppConfig) -> None:
         self.config = new_config
         # Re-apply detection options
-        self.processor_thread.pose_estimator.min_detection_confidence = self.config.detection.min_detection_confidence
-        self.processor_thread.pose_estimator.min_tracking_confidence = self.config.detection.min_tracking_confidence
-        self.processor_thread.pose_estimator.enable_hands = self.config.detection.enable_hand_tracking
-        self.processor_thread.pose_estimator.enable_face = self.config.detection.enable_face_tracking
-        self.processor_thread.pose_estimator.smoothing = self.config.detection.landmark_smoothing
-        self.processor_thread.motion_analyzer.sensitivity = self.config.detection.action_sensitivity
+        self.processor_thread.apply_detection_settings(self.config)
+        self.camera_panel.viewport.config = self.config
         self.camera_panel.viewport.update()
 
     def _open_help(self) -> None:

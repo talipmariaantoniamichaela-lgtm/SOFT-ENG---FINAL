@@ -23,9 +23,9 @@ def test_main_window_and_training_panel_integration():
     assert window.terminal_panel is not None
     assert window.training_panel is not None
 
-    # Verify custom trained model is loaded
-    assert window.processor_thread.subject_engine.is_loaded is True
-    assert len(window.processor_thread.subject_engine.classes) == 5
+    # Verify face recognition gallery is loaded
+    assert window.processor_thread.face_identifier.is_ready is True
+    assert len(window.processor_thread.face_identifier.names) == 5
 
     # Verify TrainingPanel dataset info
     assert window.training_panel.report is not None

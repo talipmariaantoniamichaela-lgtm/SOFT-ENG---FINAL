@@ -1,19 +1,20 @@
 """
 Background Video Frame Processor Worker Thread for Motion Reader.
-Performs frame acquisition, MediaPipe inference, temporal analysis,
-and measured FPS tracking off the GUI thread.
+Performs frame acquisition, MediaPipe inference, multi-person tracking,
+face identification, temporal analysis, and measured FPS tracking off the GUI thread.
 """
 import os
 import time
 import cv2
 import numpy as np
 from enum import Enum
-from typing import Optional, Tuple
+from typing import List, Optional
 from PySide6.QtCore import QThread, Signal, QMutex, QWaitCondition
 
-from app.detection.pose_estimator import PoseEstimator, TrackingResult
-from app.detection.motion_analyzer import MotionAnalyzer, FrameAnalysisResult
-from app.detection.subject_classifier import SubjectRecognitionEngine, SubjectPrediction
+from app.detection.pose_estimator import PoseEstimator
+from app.detection.motion_analyzer import ACTIVITY_PHRASES
+from app.detection.face_identity import FaceIdentifier
+from app.detection.person_tracker import PersonTracker, PersonSnapshot
 from app.services.event_manager import EventManager
 from app.config import AppConfig
 
@@ -23,12 +24,16 @@ class SourceMode(Enum):
     UPLOADED_VIDEO = "UPLOADED_VIDEO"
 
 
+# Run face recognition on every Nth frame (pose runs on every frame)
+IDENTIFY_EVERY_N_FRAMES = 3
+
+
 class FrameProcessorThread(QThread):
     """
-    Worker thread that captures frames, runs AI pose estimation & motion analysis,
-    and emits processed frames and metrics back to the UI.
+    Worker thread that captures frames, runs AI pose estimation, face recognition
+    & motion analysis for every person in view, and emits results to the UI.
     """
-    frame_ready = Signal(object, object, object, float, str)  # (rgb_frame, tracking_result, frame_analysis, fps, res_str)
+    frame_ready = Signal(object, object, float, str)          # (rgb_frame, List[PersonSnapshot], fps, res_str)
     video_position_changed = Signal(float, float, float)     # (current_sec, total_sec, progress_pct)
     status_changed = Signal(str, str)                         # (status_text, status_type)
     source_changed = Signal(SourceMode, str)                  # (mode, description)
@@ -61,45 +66,76 @@ class FrameProcessorThread(QThread):
             enable_hands=config.detection.enable_hand_tracking,
             enable_face=config.detection.enable_face_tracking,
             smoothing=config.detection.landmark_smoothing,
-            smoothing_factor=config.detection.smoothing_factor
+            smoothing_factor=config.detection.smoothing_factor,
+            num_poses=config.detection.max_people,
         )
-        self.motion_analyzer = MotionAnalyzer(
-            sensitivity=config.detection.action_sensitivity
+        self.person_tracker = PersonTracker(
+            sensitivity=config.detection.action_sensitivity,
+            smoothing=config.detection.landmark_smoothing,
+            smoothing_factor=config.detection.smoothing_factor,
         )
 
-        # Subject Identity Classifier
-        self.subject_engine = SubjectRecognitionEngine()
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        default_model = os.path.join(base_dir, "assets", "models", "subject_classifier.pth")
-        default_meta = os.path.join(base_dir, "assets", "models", "subject_classifier_meta.json")
-        if os.path.exists(default_model):
-            self.subject_engine.load_model(default_model, default_meta)
+        # Face identity (pretrained YuNet + SFace matched against the dataset gallery)
+        self.face_identifier = FaceIdentifier(
+            threshold=config.detection.face_match_threshold,
+            margin=config.detection.face_match_margin,
+        )
+        self._frame_counter = 0
 
         # FPS measurement
         self.fps_timestamps = []
 
-    def reload_subject_model(self, model_path: str, meta_path: Optional[str] = None) -> bool:
-        """Hot-reloads custom trained or selected subject recognition model weights."""
-        self._mutex.lock()
-        success = self.subject_engine.load_model(model_path, meta_path)
-        self._mutex.unlock()
-        if success:
-            classes_str = ", ".join(self.subject_engine.classes)
+    def apply_detection_settings(self, config: AppConfig) -> None:
+        self.config = config
+        self.pose_estimator.min_detection_confidence = config.detection.min_detection_confidence
+        self.pose_estimator.min_tracking_confidence = config.detection.min_tracking_confidence
+        self.pose_estimator.enable_hands = config.detection.enable_hand_tracking
+        self.pose_estimator.enable_face = config.detection.enable_face_tracking
+        self.person_tracker.smoothing = config.detection.landmark_smoothing
+        self.person_tracker.set_sensitivity(config.detection.action_sensitivity)
+        if config.detection.face_match_threshold is not None:
+            self.face_identifier.threshold = config.detection.face_match_threshold
+        if config.detection.face_match_margin is not None:
+            self.face_identifier.margin = config.detection.face_match_margin
+
+    def log_identity_status(self) -> None:
+        fi = self.face_identifier
+        if fi.is_ready:
             self.event_manager.log_system_info(
-                f"Subject recognition model loaded ({len(self.subject_engine.classes)} classes: {classes_str})"
+                f"Face recognition ready: {', '.join(fi.names)} (threshold {fi.threshold:.2f}, margin {fi.margin:.2f})"
             )
+        elif fi.models_loaded:
+            self.event_manager.log_error("Face gallery missing - run 'python enroll_faces.py' to enroll the dataset")
         else:
-            self.event_manager.log_error(f"Failed to reload subject model: {model_path}")
-        return success
+            self.event_manager.log_error(fi.error or "Face recognition models unavailable")
+
+    def reload_face_gallery(self) -> bool:
+        """Reloads face_gallery.npz after re-enrollment."""
+        self._mutex.lock()
+        ok = self.face_identifier.load_gallery(self.face_identifier.gallery_path)
+        self.person_tracker.reset()
+        self._mutex.unlock()
+        self.log_identity_status()
+        return ok
+
+    def reload_subject_model(self, model_path: str, meta_path: Optional[str] = None) -> bool:
+        """
+        Kept for the Training Studio. Live identification now uses the face gallery,
+        so a newly trained classifier reloads the gallery instead.
+        """
+        return self.reload_face_gallery()
+
+    def _reset_tracking(self) -> None:
+        self.event_manager.reset_state()
+        self.person_tracker.reset()
+        self.pose_estimator.reset()
 
     def set_source_camera(self, camera_index: int) -> None:
         """Switches to webcam mode."""
         self._mutex.lock()
         self.source_mode = SourceMode.LIVE_CAMERA
         self.camera_index = camera_index
-        self.event_manager.reset_state()
-        self.motion_analyzer.reset()
-        self.pose_estimator.reset()
+        self._reset_tracking()
         self._is_paused = False
         self._mutex.unlock()
         self.source_changed.emit(SourceMode.LIVE_CAMERA, f"Camera {camera_index}")
@@ -109,9 +145,7 @@ class FrameProcessorThread(QThread):
         self._mutex.lock()
         self.source_mode = SourceMode.UPLOADED_VIDEO
         self.video_filepath = filepath
-        self.event_manager.reset_state()
-        self.motion_analyzer.reset()
-        self.pose_estimator.reset()
+        self._reset_tracking()
         self._is_paused = False
         self._mutex.unlock()
         self.source_changed.emit(SourceMode.UPLOADED_VIDEO, filepath)
@@ -158,7 +192,7 @@ class FrameProcessorThread(QThread):
         """Restarts video playback from beginning."""
         self.seek_to(0.0)
         self.event_manager.reset_state()
-        self.motion_analyzer.reset()
+        self.person_tracker.reset()
 
     def stop_worker(self) -> None:
         """Stops the worker thread cleanly."""
@@ -182,62 +216,60 @@ class FrameProcessorThread(QThread):
 
         self.status_changed.emit("Stopped", "neutral")
 
-    def _recognize_subject(
-        self,
-        rgb_frame: np.ndarray,
-        tracking_result: TrackingResult,
-        analysis: FrameAnalysisResult
-    ) -> Tuple[Optional[str], Optional[float]]:
-        """
-        Crops the bounding box of the detected person and performs recognition
-        using the active custom-trained model.
-        """
-        if not self.subject_engine.is_loaded or not tracking_result.person_detected or not tracking_result.bounding_box:
-            return None, None
+    def _measure_fps(self, now: float) -> int:
+        self.fps_timestamps.append(now)
+        while self.fps_timestamps and now - self.fps_timestamps[0] > 1.0:
+            self.fps_timestamps.pop(0)
+        return len(self.fps_timestamps)
 
-        h, w, _ = rgb_frame.shape
-        best_pred = None
+    def _process_frame(self, bgr_frame: np.ndarray, rgb_frame: np.ndarray, t: float,
+                       t_ms: int, is_video: bool, fps: float) -> List[PersonSnapshot]:
+        """Pose -> tracking -> identity -> motion analysis -> events, for every person in the frame."""
+        self._mutex.lock()
+        try:
+            detections = self.pose_estimator.estimate_all(rgb_frame, timestamp_ms=t_ms)
+            visible, departed = self.person_tracker.update(detections, t)
 
-        # Test 1: Face / Head crop if pose landmarks are available
-        if tracking_result.pose_landmarks and len(tracking_result.pose_landmarks) > 10:
-            lms = tracking_result.pose_landmarks
-            head_pts = [lms[i] for i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] if lms[i].visibility > 0.30]
-            if head_pts:
-                min_hx = min(p.x for p in head_pts)
-                max_hx = max(p.x for p in head_pts)
-                min_hy = min(p.y for p in head_pts)
-                max_hy = max(p.y for p in head_pts)
-                pad_w = max(0.04, (max_hx - min_hx) * 0.35)
-                pad_h = max(0.04, (max_hy - min_hy) * 0.35)
-                hx1 = max(0, int((min_hx - pad_w) * w))
-                hy1 = max(0, int((min_hy - pad_h) * h))
-                hx2 = min(w, int((max_hx + pad_w) * w))
-                hy2 = min(h, int((max_hy + pad_h) * h))
-                if (hx2 - hx1) > 20 and (hy2 - hy1) > 20:
-                    face_crop = rgb_frame[hy1:hy2, hx1:hx2]
-                    pred_face = self.subject_engine.predict_raw(face_crop, is_bgr=False)
-                    if pred_face.is_known:
-                        best_pred = pred_face
+            self._frame_counter += 1
+            if visible and self.face_identifier.models_loaded and (
+                self._frame_counter % IDENTIFY_EVERY_N_FRAMES == 0
+                or any(tr.name is None and tr.age < 30 for tr in visible)
+            ):
+                h, w = bgr_frame.shape[:2]
+                faces = self.face_identifier.identify(bgr_frame)
+                self.person_tracker.assign_faces(faces, w, h, visible)
 
-        # Test 2: Full / Upper person bounding box crop
-        min_x, min_y, max_x, max_y = tracking_result.bounding_box
-        x1 = max(0, int((min_x - (max_x - min_x) * 0.10) * w))
-        y1 = max(0, int((min_y - (max_y - min_y) * 0.10) * h))
-        x2 = min(w, int((max_x + (max_x - min_x) * 0.10) * w))
-        y2 = min(h, int((max_y + (max_y - min_y) * 0.10) * h))
+            people = self.person_tracker.snapshot(visible)
+        finally:
+            self._mutex.unlock()
 
-        if (x2 - x1) > 20 and (y2 - y1) > 20:
-            body_crop = rgb_frame[y1:y2, x1:x2]
-            pred_body = self.subject_engine.predict_raw(body_crop, is_bgr=False)
-            if best_pred is None or (pred_body.is_known and pred_body.confidence > best_pred.confidence):
-                best_pred = pred_body
+        for track in departed:
+            self.event_manager.person_left(track.track_id, t, is_video_relative=is_video)
 
-        if best_pred and best_pred.is_known:
-            analysis.subject_name = best_pred.subject_name
-            analysis.subject_confidence = best_pred.confidence
-            return best_pred.subject_name, best_pred.confidence
+        for person in people:
+            a = person.analysis
+            a.fps = fps
+            self.event_manager.process_frame_analysis(
+                person_detected=True,
+                person_id=person.track_id,
+                posture=a.posture,
+                left_hand_raised=a.left_hand_raised,
+                right_hand_raised=a.right_hand_raised,
+                gestures=a.gestures if self.config.detection.enable_gesture_recognition else [],
+                body_movements=a.body_movements,
+                current_time=t,
+                is_video_relative=is_video,
+                subject_name=person.name,
+                subject_confidence=person.name_score if person.name else None,
+                activities=a.activities,
+                activity_phrases=ACTIVITY_PHRASES,
+            )
 
-        return None, None
+        if not people:
+            self.status_changed.emit("No Person Detected", "warning")
+        else:
+            self.status_changed.emit(f"Tracking {len(people)} {'person' if len(people) == 1 else 'people'}", "active")
+        return people
 
     def _run_camera_loop(self) -> None:
         """Execution loop for live camera feed."""
@@ -254,7 +286,7 @@ class FrameProcessorThread(QThread):
 
         self.status_changed.emit("Tracking...", "active")
         self.event_manager.log_system_info("Camera connected successfully")
-        self.event_manager.log_system_info("Face recognition initialized")
+        self.log_identity_status()
         self.event_manager.log_system_info("Movement detection started")
 
         self.fps_timestamps.clear()
@@ -281,52 +313,12 @@ class FrameProcessorThread(QThread):
 
                 h, w, _ = frame.shape
                 res_str = f"{w} × {h}"
-
-                # Calculate measured FPS
                 now = time.time()
-                self.fps_timestamps.append(now)
-                # Keep timestamps within the last 1.0 second
-                while self.fps_timestamps and now - self.fps_timestamps[0] > 1.0:
-                    self.fps_timestamps.pop(0)
-                measured_fps = len(self.fps_timestamps)
-
-                # Convert BGR to RGB
+                measured_fps = self._measure_fps(now)
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                # Pose Estimation
-                t_ms = int(now * 1000)
-                tracking_result = self.pose_estimator.estimate(rgb_frame, timestamp_ms=t_ms)
-
-                # Motion Analysis
-                analysis = self.motion_analyzer.analyze(tracking_result, now)
-                analysis.fps = float(measured_fps)
-
-                # Subject Recognition (Custom Trained Model)
-                subject_name, subject_conf = self._recognize_subject(rgb_frame, tracking_result, analysis)
-
-                # Process events
-                self.event_manager.process_frame_analysis(
-                    person_detected=analysis.person_detected,
-                    person_id=analysis.person_id,
-                    posture=analysis.posture,
-                    left_hand_raised=analysis.left_hand_raised,
-                    right_hand_raised=analysis.right_hand_raised,
-                    gestures=analysis.gestures,
-                    body_movements=analysis.body_movements,
-                    current_time=now,
-                    is_video_relative=False,
-                    subject_name=subject_name,
-                    subject_confidence=subject_conf
-                )
-
-                # Update tracking status based on person detection
-                if not analysis.person_detected:
-                    self.status_changed.emit("No Person Detected", "warning")
-                else:
-                    self.status_changed.emit("Tracking...", "active")
-
-                # Emit to UI
-                self.frame_ready.emit(rgb_frame, tracking_result, analysis, float(measured_fps), res_str)
+                people = self._process_frame(frame, rgb_frame, now, int(now * 1000), False, float(measured_fps))
+                self.frame_ready.emit(rgb_frame, people, float(measured_fps), res_str)
 
                 # Small yield to maintain ~30 FPS if camera runs faster
                 time.sleep(0.005)
@@ -352,8 +344,8 @@ class FrameProcessorThread(QThread):
         frame_interval = 1.0 / max(10.0, min(60.0, video_fps))
 
         self.status_changed.emit("Tracking...", "active")
-        self.event_manager.log_system_info("Camera connected successfully")
-        self.event_manager.log_system_info("Face recognition initialized")
+        self.event_manager.log_system_info(f"Video opened: {os.path.basename(self.video_filepath)}")
+        self.log_identity_status()
         self.event_manager.log_system_info("Movement detection started")
 
         self.fps_timestamps.clear()
@@ -370,6 +362,7 @@ class FrameProcessorThread(QThread):
                     target_frame = int(self._seek_target_pct * total_frames)
                     cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
                     self._seek_requested = False
+                    self.person_tracker.reset()
                 self._mutex.unlock()
 
                 if not self._is_running or self.source_mode != SourceMode.UPLOADED_VIDEO:
@@ -378,11 +371,10 @@ class FrameProcessorThread(QThread):
                 t_start = time.time()
                 ret, frame = cap.read()
                 if not ret or frame is None:
-                    # Video completed: loop back or pause
+                    # Video completed: loop back
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     self.event_manager.reset_state()
-                    self.motion_analyzer.reset()
-                    self.subject_engine.history.clear()
+                    self.person_tracker.reset()
                     time.sleep(0.1)
                     continue
 
@@ -392,56 +384,15 @@ class FrameProcessorThread(QThread):
 
                 h, w, _ = frame.shape
                 res_str = f"{w} × {h}"
-
-                # Calculate measured FPS
-                now = time.time()
-                self.fps_timestamps.append(now)
-                while self.fps_timestamps and now - self.fps_timestamps[0] > 1.0:
-                    self.fps_timestamps.pop(0)
-                measured_fps = len(self.fps_timestamps)
-
-                # Convert BGR to RGB
+                measured_fps = self._measure_fps(time.time())
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                # Pose Estimation
-                t_ms = int(curr_sec * 1000)
-                tracking_result = self.pose_estimator.estimate(rgb_frame, timestamp_ms=t_ms)
-
-                # Motion Analysis
-                analysis = self.motion_analyzer.analyze(tracking_result, curr_sec)
-                analysis.fps = float(measured_fps)
-
-                # Subject Recognition (Custom Trained Model)
-                subject_name, subject_conf = self._recognize_subject(rgb_frame, tracking_result, analysis)
-
-                # Process events with video-relative timestamps
-                self.event_manager.process_frame_analysis(
-                    person_detected=analysis.person_detected,
-                    person_id=analysis.person_id,
-                    posture=analysis.posture,
-                    left_hand_raised=analysis.left_hand_raised,
-                    right_hand_raised=analysis.right_hand_raised,
-                    gestures=analysis.gestures,
-                    body_movements=analysis.body_movements,
-                    current_time=curr_sec,
-                    is_video_relative=True,
-                    subject_name=subject_name,
-                    subject_confidence=subject_conf
-                )
-
-                # Status
-                if not analysis.person_detected:
-                    self.status_changed.emit("No Person Detected", "warning")
-                else:
-                    self.status_changed.emit("Tracking...", "active")
-
-                # Emit to UI
-                self.frame_ready.emit(rgb_frame, tracking_result, analysis, float(measured_fps), res_str)
+                people = self._process_frame(frame, rgb_frame, curr_sec, int(curr_sec * 1000), True, float(measured_fps))
+                self.frame_ready.emit(rgb_frame, people, float(measured_fps), res_str)
                 self.video_position_changed.emit(curr_sec, duration_sec, progress_pct)
 
                 # Frame pacing to match video FPS
                 elapsed = time.time() - t_start
-                sleep_time = max(0.001, frame_interval - elapsed)
-                time.sleep(sleep_time)
+                time.sleep(max(0.001, frame_interval - elapsed))
         finally:
             cap.release()
