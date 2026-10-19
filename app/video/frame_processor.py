@@ -101,9 +101,9 @@ class FrameProcessorThread(QThread):
     def log_identity_status(self) -> None:
         fi = self.face_identifier
         if fi.is_ready:
-            self.event_manager.log_system_info(
-                f"Face recognition ready: {', '.join(fi.names)} (threshold {fi.threshold:.2f}, margin {fi.margin:.2f})"
-            )
+            rule = ("names shown at 50%+ match" if fi.calibration is not None
+                    else f"threshold {fi.threshold:.2f}, margin {fi.margin:.2f}")
+            self.event_manager.log_system_info(f"Face recognition ready: {', '.join(fi.names)} ({rule})")
         elif fi.models_loaded:
             self.event_manager.log_error("Face gallery missing - run 'python enroll_faces.py' to enroll the dataset")
         else:

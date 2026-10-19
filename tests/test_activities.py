@@ -97,13 +97,43 @@ def test_tracker_keeps_ids_and_unique_names():
         for t in visible:
             nose = t.tracking.pose_landmarks[NOSE]
             x, y = int(nose.x * 1280) - 30, int(nose.y * 720) - 30
+            first = t.track_id == ids[0]
             faces.append(FaceMatch(box=(x, y, 60, 60), name="Maria",
-                                   score=0.7 if t.track_id == ids[0] else 0.5, best_guess="Maria", det_score=0.9))
+                                   score=0.7 if first else 0.5, best_guess="Maria", det_score=0.9,
+                                   probability=0.9 if first else 0.6))
         tracker.assign_faces(faces, 1280, 720, visible)
 
-    named = {t.track_id: t.name for t in tracker.tracks.values()}
-    assert named[ids[0]] == "Maria"
-    assert named[ids[1]] is None
+    named = {t.track_id: t for t in tracker.tracks.values()}
+    assert named[ids[0]].name == "Maria"
+    assert abs(named[ids[0]].match_percent - 90.0) < 0.5
+    assert named[ids[1]].name is None
+    # The name is taken, so the second person must not be offered it as a guess either
+    assert named[ids[1]].closest_name is None
+
+
+def test_match_percent_drops_when_recognitions_disagree():
+    tracker = PersonTracker()
+    for i in range(10):
+        visible, _ = tracker.update([_person_at(0.3)], 1000 + i / 30)
+        t = visible[0]
+        nose = t.tracking.pose_landmarks[NOSE]
+        x, y = int(nose.x * 1280) - 30, int(nose.y * 720) - 30
+        guess = "Mark" if i % 2 else "Lawrenz"   # alternating, never confident
+        tracker.assign_faces([FaceMatch(box=(x, y, 60, 60), name=None, score=0.4, best_guess=guess,
+                                        det_score=0.9, probability=0.3)], 1280, 720, visible)
+    t = next(iter(tracker.tracks.values()))
+    assert t.name is None
+    assert t.closest_name in ("Mark", "Lawrenz")
+    assert t.match_percent <= 15.0 + 1e-6
+
+
+def test_identity_events_show_match_percent():
+    m = EventManager()
+    m.hit_threshold = 1
+    m.process_frame_analysis(True, 1, None, False, False, [], [], 1000.0,
+                             subject_name="Quinneth", subject_confidence=0.87)
+    line = m.events[0].formatted_line()
+    assert "Quinneth detected" in line and "87% match" in line
 
 
 def test_tracker_reports_departures():

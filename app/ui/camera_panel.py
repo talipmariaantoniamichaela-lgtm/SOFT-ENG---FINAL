@@ -31,6 +31,15 @@ _NAME_COLORS = ["#22d3ee", "#a3e635", "#f472b6", "#fbbf24", "#a78bfa", "#fb923c"
 _UNKNOWN_COLOR = "#00d2ff"
 
 
+def confidence_color(percent: float) -> QColor:
+    """Green when the identity match is strong, amber when moderate, red when weak."""
+    if percent >= 80.0:
+        return QColor("#22c55e")
+    if percent >= 50.0:
+        return QColor("#facc15")
+    return QColor("#ef4444")
+
+
 def person_color(person: PersonSnapshot) -> QColor:
     if not person.name:
         return QColor(_UNKNOWN_COLOR)
@@ -125,6 +134,9 @@ class VideoViewport(QWidget):
         if self.config.display.show_fps_badge:
             self._draw_status_badge(painter, video_rect)
 
+        # 7. Identity match panel (top-right)
+        self._draw_people_panel(painter, video_rect)
+
     def _draw_person_tag(self, painter: QPainter, person: PersonSnapshot, color: QColor,
                          ox: float, oy: float, tw: float, th: float) -> None:
         """Draws the person's box, a name pill, and a line listing what they are doing."""
@@ -141,23 +153,47 @@ class VideoViewport(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawRoundedRect(QRectF(bx, by, bw, bh), 6.0, 6.0)
 
-        # Name pill
+        # Name pill with match percentage and confidence bar
         if person.name:
-            name_text = f"● {person.name}  {person.name_score:.2f}"
+            name_text = f"● {person.name}"
+            pct_text = f"{person.match_percent:.0f}% match"
+            sub_text = None
         else:
             name_text = f"● Unknown (ID {person.track_id})" if self.config.display.show_person_id else "● Unknown"
-        painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
-        fm = painter.fontMetrics()
-        tag_h = 24.0
-        tag_w = fm.horizontalAdvance(name_text) + 18.0
+            pct_text = None
+            if person.closest_name:
+                sub_text = f"closest: {person.closest_name} {person.match_percent:.0f}%"
+            elif not person.face_seen:
+                sub_text = "face not visible"
+            else:
+                sub_text = "not in dataset"
+        name_font = QFont("Segoe UI", 10, QFont.Bold)
+        small_font = QFont("Segoe UI", 8)
+        painter.setFont(name_font)
+        name_w = painter.fontMetrics().horizontalAdvance(name_text)
+        painter.setFont(small_font)
+        right_text = pct_text or sub_text or ""
+        right_w = painter.fontMetrics().horizontalAdvance(right_text)
+
+        tag_h = 34.0 if person.name else 24.0
+        tag_w = max(name_w + right_w + 34.0, 150.0)
         tag_x = max(ox + 8.0, min(ox + tw - tag_w - 8.0, bx))
         tag_y = max(oy + 8.0, by - tag_h - 26.0)
         pill_rect = QRectF(tag_x, tag_y, tag_w, tag_h)
         painter.setPen(QPen(color, 1.2))
-        painter.setBrush(QBrush(QColor(11, 15, 25, 225)))
-        painter.drawRoundedRect(pill_rect, 12.0, 12.0)
+        painter.setBrush(QBrush(QColor(11, 15, 25, 230)))
+        painter.drawRoundedRect(pill_rect, 10.0, 10.0)
+
+        text_row = QRectF(tag_x + 10.0, tag_y + 2.0, tag_w - 20.0, 22.0)
+        painter.setFont(name_font)
         painter.setPen(color)
-        painter.drawText(pill_rect, Qt.AlignCenter, name_text)
+        painter.drawText(text_row, Qt.AlignLeft | Qt.AlignVCenter, name_text)
+        painter.setFont(small_font)
+        painter.setPen(confidence_color(person.match_percent) if pct_text else QColor("#94a3b8"))
+        painter.drawText(text_row, Qt.AlignRight | Qt.AlignVCenter, right_text)
+        if person.name:
+            self._draw_confidence_bar(painter, QRectF(tag_x + 10.0, tag_y + 25.0, tag_w - 20.0, 4.0),
+                                      person.match_percent)
 
         # Actions line under the name
         labels = person.analysis.summary_labels() if person.analysis else []
@@ -173,6 +209,52 @@ class VideoViewport(QWidget):
             painter.drawRoundedRect(act_rect, 10.0, 10.0)
             painter.setPen(QColor("#e2e8f0"))
             painter.drawText(act_rect, Qt.AlignCenter, act_text)
+
+    @staticmethod
+    def _draw_confidence_bar(painter: QPainter, rect: QRectF, percent: float) -> None:
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(255, 255, 255, 40)))
+        painter.drawRoundedRect(rect, 2.0, 2.0)
+        filled = QRectF(rect.x(), rect.y(), rect.width() * max(0.0, min(100.0, percent)) / 100.0, rect.height())
+        painter.setBrush(QBrush(confidence_color(percent)))
+        painter.drawRoundedRect(filled, 2.0, 2.0)
+
+    def _draw_people_panel(self, painter: QPainter, video_rect: QRectF) -> None:
+        """Top-right list of everyone in view with their identity match percentage."""
+        if not self.people:
+            return
+        row_h, pad, width = 30.0, 10.0, 230.0
+        rows = sorted(self.people, key=lambda p: (p.name is None, -p.match_percent))
+        height = pad * 2 + 18.0 + row_h * len(rows)
+        x = video_rect.right() - width - 16.0
+        y = video_rect.top() + 16.0
+        painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
+        painter.setBrush(QBrush(QColor(11, 15, 25, 215)))
+        painter.drawRoundedRect(QRectF(x, y, width, height), 10.0, 10.0)
+
+        painter.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        painter.setPen(QColor("#94a3b8"))
+        painter.drawText(QRectF(x + pad, y + pad - 2.0, width - 2 * pad, 18.0), Qt.AlignLeft | Qt.AlignVCenter,
+                         f"PEOPLE IN VIEW ({len(rows)})")
+
+        for i, person in enumerate(rows):
+            ry = y + pad + 18.0 + i * row_h
+            line = QRectF(x + pad, ry, width - 2 * pad, 16.0)
+            painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            painter.setPen(person_color(person))
+            painter.drawText(line, Qt.AlignLeft | Qt.AlignVCenter,
+                             person.name or f"Unknown (ID {person.track_id})")
+            painter.setFont(QFont("Segoe UI", 8))
+            if person.name:
+                painter.setPen(confidence_color(person.match_percent))
+                painter.drawText(line, Qt.AlignRight | Qt.AlignVCenter, f"{person.match_percent:.0f}%")
+                self._draw_confidence_bar(painter, QRectF(x + pad, ry + 18.0, width - 2 * pad, 4.0),
+                                          person.match_percent)
+            else:
+                painter.setPen(QColor("#94a3b8"))
+                hint = (f"{person.closest_name}? {person.match_percent:.0f}%" if person.closest_name
+                        else ("no face yet" if not person.face_seen else "not in dataset"))
+                painter.drawText(line, Qt.AlignRight | Qt.AlignVCenter, hint)
 
     def _draw_corner_markers(self, painter: QPainter, rect: QRectF) -> None:
         """Draws subtle cyan/blue L-brackets at the four corners of the video frame."""

@@ -155,6 +155,12 @@ The desktop app now identifies people with pretrained face models rather than th
 3. The embedding is compared with `face_gallery.npz`, which holds embeddings of every usable dataset photo (plus mirrored, low-res and darker copies). A face below the calibrated similarity threshold is shown as **Unknown (ID n)**.
 4. Each face is attached to the pose skeleton whose head it covers. The name is decided by a vote over recent frames, and one name can belong to only one person at a time.
 
+**Match percentage.** Every recognized person shows how likely it is that they are that person from the dataset, e.g. `● Maria 92% match`. A colored bar shows the strength (green 80%+, amber 50–79%, red below 50%), and a *People in view* panel lists everyone on screen. Terminal lines read `Maria detected — 92% match`.
+- The percentage comes from a logistic model that `enroll_faces.py` fits on webcam-quality copies of the dataset photos (small face, dim, noisy, JPEG). Its inputs are the face's similarity to the person and its lead over the next-closest person.
+- On those copies, faces shown at 70% or more were the right person every time, and faces shown at 50–70% were right 63% of the time.
+- A name is given at 50% or more. Below that the person is *Unknown*, with their closest guess shown (`closest: Mark 31%`).
+- The on-screen value is averaged over the last 15 recognitions. A recognition whose best guess was someone else counts as 0%, so an uncertain face scores low instead of flickering between names.
+
 Build or rebuild the gallery after adding photos or people (one folder per person):
 
 ```powershell

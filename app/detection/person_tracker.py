@@ -32,9 +32,12 @@ class PersonTrack:
     bbox: BBox
     misses: int = 0
     age: int = 0
-    id_votes: Deque[Tuple[Optional[str], float]] = field(default_factory=lambda: deque(maxlen=ID_VOTE_WINDOW))
+    # Recent recognitions: (accepted name or None, similarity, best guess, match probability)
+    id_votes: Deque[Tuple[Optional[str], float, str, float]] = field(default_factory=lambda: deque(maxlen=ID_VOTE_WINDOW))
     name: Optional[str] = None
     name_score: float = 0.0
+    match_percent: float = 0.0                   # % chance this person is `name` (or the closest guess)
+    closest_name: Optional[str] = None           # best guess while unrecognized
     face_box: Optional[BBox] = None              # normalized (x1, y1, x2, y2), last seen face
     tracking: Optional[TrackingResult] = None
     analysis: Optional[FrameAnalysisResult] = None
@@ -42,7 +45,7 @@ class PersonTrack:
     def vote_summary(self) -> Tuple[Optional[str], float, float]:
         """Returns (winning name or None, mean similarity of its votes, its vote weight)."""
         totals: Dict[str, List[float]] = {}
-        for name, score in self.id_votes:
+        for name, score, _, _ in self.id_votes:
             if name:
                 totals.setdefault(name, []).append(score)
         if not totals:
@@ -52,6 +55,22 @@ class PersonTrack:
         if len(votes) < ID_MIN_VOTES or len(votes) < 0.4 * len(self.id_votes):
             return None, 0.0, 0.0
         return best, sum(votes) / len(votes), sum(votes)
+
+    def percent_for(self, name: str) -> float:
+        """
+        Match percentage for `name` averaged over recent recognitions; a recognition
+        whose best guess was someone else counts as 0%, so inconsistent faces score low.
+        """
+        if not self.id_votes:
+            return 0.0
+        return 100.0 * sum(p if g == name else 0.0 for _, _, g, p in self.id_votes) / len(self.id_votes)
+
+    def closest_guess(self) -> Optional[str]:
+        weights: Dict[str, float] = {}
+        for _, _, guess, prob in self.id_votes:
+            if guess:
+                weights[guess] = weights.get(guess, 0.0) + prob
+        return max(weights, key=weights.get) if weights else None
 
 
 @dataclass
@@ -63,6 +82,9 @@ class PersonSnapshot:
     tracking: TrackingResult
     analysis: FrameAnalysisResult
     face_box: Optional[BBox]
+    match_percent: float = 0.0           # for `name`, or for `closest_name` when unrecognized
+    closest_name: Optional[str] = None
+    face_seen: bool = False              # at least one recognition attempt on this person
 
     @property
     def label(self) -> str:
@@ -197,7 +219,7 @@ class PersonTracker:
             if best is None:
                 continue
             claimed.add(best.track_id)
-            best.id_votes.append((face.name, face.score))
+            best.id_votes.append((face.name, face.score, face.best_guess, face.probability))
             best.face_box = (x / frame_w, y / frame_h, (x + w) / frame_w, (y + h) / frame_h)
 
         self._resolve_names()
@@ -213,8 +235,14 @@ class PersonTracker:
             if name and name not in taken:
                 taken.add(name)
                 track.name, track.name_score = name, round(score, 2)
+                track.closest_name = None
+                track.match_percent = round(track.percent_for(name), 1)
             else:
                 track.name, track.name_score = None, 0.0
+                guess = track.closest_guess()
+                # A name already shown on someone else can't also be this person's guess
+                track.closest_name = guess if guess not in taken else None
+                track.match_percent = round(track.percent_for(guess), 1) if track.closest_name else 0.0
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -224,7 +252,7 @@ class PersonTracker:
             if track.tracking is None or track.analysis is None:
                 continue
             track.analysis.subject_name = track.name
-            track.analysis.subject_confidence = track.name_score if track.name else None
+            track.analysis.subject_confidence = round(track.match_percent / 100.0, 2) if track.name else None
             out.append(PersonSnapshot(
                 track_id=track.track_id,
                 name=track.name,
@@ -232,5 +260,8 @@ class PersonTracker:
                 tracking=track.tracking,
                 analysis=track.analysis,
                 face_box=track.face_box,
+                match_percent=track.match_percent,
+                closest_name=track.closest_name,
+                face_seen=bool(track.id_votes),
             ))
         return out

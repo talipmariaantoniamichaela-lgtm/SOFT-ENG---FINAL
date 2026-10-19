@@ -55,17 +55,24 @@ class MovementEvent:
         # Unrecognized people are told apart by their tracking ID
         return self.person_id is not None and self.subject_name is None
 
+    def _conf_text(self) -> str:
+        if self.confidence is None:
+            return ""
+        if self.event_type == EventType.PERSON_DETECTION:
+            # Identity confidence: calibrated chance this is the person from the dataset
+            return f" — {self.confidence * 100:.0f}% match"
+        return f" (conf: {self.confidence:.2f})"
+
     def formatted_line(self) -> str:
         """Returns the formatted plain text line according to reference."""
-        conf_str = f" (conf: {self.confidence:.2f})" if self.confidence is not None else ""
         id_str = f" (ID: {self.person_id})" if self._show_id() else ""
-        return f"[{self.formatted_time}] {self.description}{id_str}{conf_str}"
+        return f"[{self.formatted_time}] {self.description}{id_str}{self._conf_text()}"
 
     def formatted_html(self) -> str:
         """Returns HTML formatted line with appropriate color tag."""
         time_color = "#64748b"  # Blue-gray for timestamps
         event_color = self.color
-        conf_str = f" <span style='color: #94a3b8;'>(conf: {self.confidence:.2f})</span>" if self.confidence is not None else ""
+        conf_str = f" <span style='color: #94a3b8;'>{self._conf_text().strip()}</span>" if self.confidence is not None else ""
         id_str = f" <span style='color: #94a3b8;'>(ID: {self.person_id})</span>" if self._show_id() else ""
         return f"<span style='color: {time_color};'>[{self.formatted_time}]</span> <span style='color: {event_color}; font-weight: 500;'>{self.description}{id_str}{conf_str}</span>"
 
