@@ -164,3 +164,30 @@ def test_event_manager_keeps_people_separate():
     assert "Mark has arms crossed" in d
     assert "Mark left the frame" in d
     assert d.count("Maria is standing") == 1
+
+
+def test_no_stepping_from_jittery_hidden_hips():
+    import random
+    rng = random.Random(0)
+    analyzer = MotionAnalyzer()
+    steps = []
+    for i in range(120):
+        lms = create_mock_body()
+        # Hips out of view: low visibility, positions jumping around
+        for hi in (23, 24):
+            lms[hi] = NormalizedLandmark(0.5 + rng.uniform(-0.1, 0.1), 0.9 + rng.uniform(-0.2, 0.2), 0, 0.2)
+        res = analyzer.analyze(TrackingResult(person_detected=True, pose_landmarks=lms), 1000 + i / 30)
+        steps += [m["name"] for m in res.body_movements if m["name"].startswith("Stepping")]
+    assert steps == []
+
+
+def test_real_step_forward_still_detected():
+    analyzer = MotionAnalyzer()
+    names = []
+    for i in range(30):
+        s = 1.0 if i < 12 else 1.25   # whole body grows: person moved closer
+        lms = [NormalizedLandmark(0.5 + (l.x - 0.5) * s, 0.5 + (l.y - 0.5) * s, 0, l.visibility)
+               for l in create_mock_body()]
+        res = analyzer.analyze(TrackingResult(person_detected=True, pose_landmarks=lms), 1000 + i / 30)
+        names += [m["name"] for m in res.body_movements]
+    assert "Stepping forward" in names

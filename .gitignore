@@ -51,3 +51,6 @@ uploads/*
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Locally captured webcam photos (capture_person.py) - kept off GitHub
+app/assets/dataset/Datasets-20261018T052230Z-1-001/Datasets/Kyle/

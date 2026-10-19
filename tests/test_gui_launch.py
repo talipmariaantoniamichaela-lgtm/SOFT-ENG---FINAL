@@ -25,11 +25,12 @@ def test_main_window_and_training_panel_integration():
 
     # Verify face recognition gallery is loaded
     assert window.processor_thread.face_identifier.is_ready is True
-    assert len(window.processor_thread.face_identifier.names) == 5
+    names = window.processor_thread.face_identifier.names
+    assert {"Dainna", "Lawrenz", "Maria", "Mark", "Quinneth"} <= set(names)
 
     # Verify TrainingPanel dataset info
     assert window.training_panel.report is not None
-    assert window.training_panel.report.total_files == 900
+    assert window.training_panel.report.total_files >= 900
 
     # Verify view navigation
     window._show_training_view()

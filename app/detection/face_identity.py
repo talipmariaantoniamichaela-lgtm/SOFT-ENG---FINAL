@@ -317,6 +317,9 @@ def load_image_for_enrollment(path: str) -> Optional[np.ndarray]:
     img = cv2.imread(path, cv2.IMREAD_REDUCED_COLOR_2)
     if img is not None and max(img.shape[:2]) > 2200:
         img = cv2.imread(path, cv2.IMREAD_REDUCED_COLOR_4)
+    elif img is not None and max(img.shape[:2]) < 1000:
+        # Small photos (e.g. webcam captures) keep full resolution
+        img = cv2.imread(path, cv2.IMREAD_COLOR)
     if img is None:
         # cv2.imread cannot open non-ASCII Windows paths
         try:

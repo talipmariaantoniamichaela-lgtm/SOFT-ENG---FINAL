@@ -25,9 +25,9 @@ def test_dataset_validator_discovery():
 
     info = DatasetValidator.validate_dataset(dataset_dir)
     assert info.is_valid is True
-    assert info.total_files == 900
-    assert len(info.classes) == 5
-    assert set(info.classes) == {"Dainna", "Lawrenz", "Maria", "Mark", "Quinneth"}
+    # The original five; locally captured people (capture_person.py) may be added
+    assert {"Dainna", "Lawrenz", "Maria", "Mark", "Quinneth"} <= set(info.classes)
+    assert info.total_files == sum(info.class_counts.values())
     assert info.class_counts["Dainna"] == 200
     assert info.class_counts["Lawrenz"] == 200
     assert info.class_counts["Maria"] == 200

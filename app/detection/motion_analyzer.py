@@ -119,6 +119,7 @@ class MotionAnalyzer:
         self.history_landmarks = deque(maxlen=history_length)
         self.history_timestamps = deque(maxlen=history_length)
         self.history_scales = deque(maxlen=history_length)
+        self.history_head_heights = deque(maxlen=history_length)
         self.posture_buffer = deque(maxlen=5)
 
         # Hysteresis state for hand raise
@@ -152,6 +153,7 @@ class MotionAnalyzer:
         self.history_landmarks.clear()
         self.history_timestamps.clear()
         self.history_scales.clear()
+        self.history_head_heights.clear()
         self.posture_buffer.clear()
         self.left_hand_is_raised = False
         self.right_hand_is_raised = False
@@ -204,8 +206,13 @@ class MotionAnalyzer:
 
         torso_height = math.hypot(mid_shoulder_x - mid_hip_x, mid_shoulder_y - mid_hip_y)
         shoulder_width = math.hypot(l_sh.x - r_sh.x, l_sh.y - r_sh.y)
-        body_scale = max(0.05, max(torso_height, shoulder_width))
+        # Hips out of frame (desk webcam) are guessed by the model and jitter a lot,
+        # so they only count toward body size when actually visible
+        hips_seen = l_hip.visibility > 0.6 and r_hip.visibility > 0.6
+        body_scale = max(0.05, max(torso_height, shoulder_width) if hips_seen else shoulder_width)
         self.history_scales.append(body_scale)
+        # Independent size cue (head above shoulders) used to confirm stepping
+        self.history_head_heights.append(max(1e-3, abs(mid_shoulder_y - nose.y)))
 
         # -------------------------------------------------------------
         # 1. Posture Classification (Standing / Sitting / Crouching / Lying down)
@@ -314,18 +321,27 @@ class MotionAnalyzer:
             past_scale = sum(scales[:6]) / 6.0
             recent_scale = sum(scales[-6:]) / 6.0
             scale_ratio = recent_scale / max(1e-4, past_scale)
+            heads = list(self.history_head_heights)
+            head_ratio = (sum(heads[-6:]) / 6.0) / max(1e-4, sum(heads[:6]) / 6.0)
 
             step_fwd_threshold = 1.08 / self.sensitivity
             step_bwd_threshold = 0.92 * self.sensitivity
+            # Turning shrinks shoulder width and raising an arm shifts a shoulder;
+            # a real step changes the head-above-shoulders height the same way
+            arms_moving = self.left_hand_is_raised or self.right_hand_is_raised
+            head_fwd = head_ratio > 1.0 + (step_fwd_threshold - 1.0) * 0.6
+            head_bwd = head_ratio < 1.0 - (1.0 - step_bwd_threshold) * 0.6
 
-            if scale_ratio > step_fwd_threshold:
+            if arms_moving:
+                pass
+            elif scale_ratio > step_fwd_threshold and head_fwd:
                 self.last_step_time = current_timestamp
                 conf = min(0.94, 0.82 + (scale_ratio - step_fwd_threshold) * 0.8)
                 result.body_movements.append({
                     "name": "Stepping forward",
                     "confidence": round(conf, 2)
                 })
-            elif scale_ratio < step_bwd_threshold:
+            elif scale_ratio < step_bwd_threshold and head_bwd:
                 self.last_step_time = current_timestamp
                 conf = min(0.94, 0.82 + (step_bwd_threshold - scale_ratio) * 0.8)
                 result.body_movements.append({

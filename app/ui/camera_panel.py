@@ -403,6 +403,8 @@ class VideoViewport(QWidget):
                     for o_idx in oval_indices[1:]:
                         face_path.lineTo(to_screen(f_lms[o_idx]))
                     face_path.closeSubpath()
+                    # Outline only: the brush may still hold the white joint fill
+                    painter.setBrush(Qt.NoBrush)
                     painter.drawPath(face_path)
 
         # 4. Draw Major Anatomical Joint Nodes
