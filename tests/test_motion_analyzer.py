@@ -139,6 +139,28 @@ def test_arm_raise_detection():
     assert res_both.both_hands_raised is True
 
 
+def test_hand_raise_state_clears_when_hands_are_lowered_or_lost():
+    analyzer = MotionAnalyzer()
+    raised = TrackingResult(
+        person_detected=True,
+        pose_landmarks=create_mock_body(left_hand_raised=True, right_hand_raised=True),
+    )
+    assert analyzer.analyze(raised, 1000.0).both_hands_raised is True
+
+    # Returning both wrists to their normal position must clear immediately.
+    lowered = TrackingResult(person_detected=True, pose_landmarks=create_mock_body())
+    assert analyzer.analyze(lowered, 1000.1).both_hands_raised is False
+
+    # A hand that is no longer confidently visible must not retain an old pose.
+    analyzer.analyze(raised, 1000.2)
+    partially_visible = create_mock_body()
+    partially_visible[LEFT_WRIST].visibility = 0.0
+    partially_visible[RIGHT_WRIST].visibility = 0.0
+    res = analyzer.analyze(TrackingResult(person_detected=True, pose_landmarks=partially_visible), 1000.3)
+    assert res.left_hand_raised is False
+    assert res.right_hand_raised is False
+
+
 def test_leaning_detection():
     analyzer = MotionAnalyzer()
 

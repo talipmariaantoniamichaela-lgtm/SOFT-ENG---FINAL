@@ -85,6 +85,8 @@ class PersonSnapshot:
     match_percent: float = 0.0           # for `name`, or for `closest_name` when unrecognized
     closest_name: Optional[str] = None
     face_seen: bool = False              # at least one recognition attempt on this person
+    facial_expression: str = "Neutral"
+    facial_expression_confidence: float = 0.0
 
     @property
     def label(self) -> str:
@@ -263,5 +265,7 @@ class PersonTracker:
                 match_percent=track.match_percent,
                 closest_name=track.closest_name,
                 face_seen=bool(track.id_votes),
+                facial_expression=track.tracking.facial_expression,
+                facial_expression_confidence=track.tracking.facial_expression_confidence,
             ))
         return out

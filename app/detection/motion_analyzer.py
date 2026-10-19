@@ -227,25 +227,32 @@ class MotionAnalyzer:
         # In normalized coords, y=0 is top of image, y=1 is bottom.
         # Hand is raised when wrist y is significantly above shoulder y.
         raise_threshold = 0.03 * self.sensitivity
-        lower_threshold = 0.04 / self.sensitivity
+        # Only a small hysteresis band is needed.  The old release threshold
+        # required a wrist to travel *well below* its shoulder, so a wrist that
+        # was briefly lost by the camera could leave the "raised" state stuck.
+        release_margin = 0.01 * self.sensitivity
 
         # Left hand raise check
         if l_wr.visibility > 0.4 and l_sh.visibility > 0.4:
             if not self.left_hand_is_raised:
                 if l_wr.y < l_sh.y - raise_threshold:
                     self.left_hand_is_raised = True
-            else:
-                if l_wr.y > l_sh.y + lower_threshold:
-                    self.left_hand_is_raised = False
+            elif l_wr.y >= l_sh.y - release_margin:
+                self.left_hand_is_raised = False
+        else:
+            # A state must describe the current frame, not the last good one.
+            # This also clears the label when a lowered hand leaves the frame.
+            self.left_hand_is_raised = False
 
         # Right hand raise check
         if r_wr.visibility > 0.4 and r_sh.visibility > 0.4:
             if not self.right_hand_is_raised:
                 if r_wr.y < r_sh.y - raise_threshold:
                     self.right_hand_is_raised = True
-            else:
-                if r_wr.y > r_sh.y + lower_threshold:
-                    self.right_hand_is_raised = False
+            elif r_wr.y >= r_sh.y - release_margin:
+                self.right_hand_is_raised = False
+        else:
+            self.right_hand_is_raised = False
 
         result.left_hand_raised = self.left_hand_is_raised
         result.right_hand_raised = self.right_hand_is_raised
@@ -333,6 +340,8 @@ class MotionAnalyzer:
 
         # Hands resting on the head are not "raised hands"
         if any(a["name"] == "Hands on head" for a in result.activities):
+            self.left_hand_is_raised = False
+            self.right_hand_is_raised = False
             result.left_hand_raised = result.right_hand_raised = result.both_hands_raised = False
 
         # Head shaking moves the nose sideways; don't report it as turning

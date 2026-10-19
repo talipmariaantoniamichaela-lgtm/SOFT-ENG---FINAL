@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from app.detection.facial_expression import classify_expression
 
 
 def get_model_path(filename: str) -> str:
@@ -51,6 +52,8 @@ class TrackingResult:
     left_hand_landmarks: Optional[List[NormalizedLandmark]] = None
     right_hand_landmarks: Optional[List[NormalizedLandmark]] = None
     face_landmarks: Optional[List[NormalizedLandmark]] = None
+    facial_expression: str = "Neutral"
+    facial_expression_confidence: float = 0.0
     bounding_box: Optional[Tuple[float, float, float, float]] = None  # (min_x, min_y, max_x, max_y)
     timestamp_ms: int = 0
     image_size: Tuple[int, int] = (1, 1)  # (width, height) of the source frame, for aspect-correct geometry
@@ -245,6 +248,7 @@ class PoseEstimator:
                     num_faces=self.num_poses,
                     min_face_detection_confidence=self.min_detection_confidence,
                     min_tracking_confidence=self.min_tracking_confidence,
+                    output_face_blendshapes=True,
                     running_mode=vision.RunningMode.IMAGE
                 )
                 self.face_detector = vision.FaceLandmarker.create_from_options(options)
@@ -339,7 +343,9 @@ class PoseEstimator:
         if self.enable_face and self.face_detector is not None:
             try:
                 face_result = self.face_detector.detect(mp_image)
-                for face in (face_result.face_landmarks or []):
+                face_meshes = face_result.face_landmarks or []
+                blendshape_sets = face_result.face_blendshapes or []
+                for index, face in enumerate(face_meshes):
                     f_landmarks = [NormalizedLandmark(x=lm.x, y=lm.y, z=lm.z) for lm in face]
                     tip = f_landmarks[1] if len(f_landmarks) > 1 else f_landmarks[0]
                     best, best_d = None, 0.10
@@ -350,6 +356,12 @@ class PoseEstimator:
                             best, best_d = person, d
                     if best is not None:
                         best.face_landmarks = f_landmarks
+                        categories = blendshape_sets[index] if index < len(blendshape_sets) else []
+                        scores = {
+                            category.category_name: float(category.score)
+                            for category in categories
+                        }
+                        best.facial_expression, best.facial_expression_confidence = classify_expression(scores)
             except Exception:
                 pass
 

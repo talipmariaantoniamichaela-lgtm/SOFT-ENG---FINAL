@@ -197,6 +197,8 @@ class VideoViewport(QWidget):
 
         # Actions line under the name
         labels = person.analysis.summary_labels() if person.analysis else []
+        if person.tracking.face_landmarks and person.facial_expression != "Neutral":
+            labels.append(f"{person.facial_expression} {person.facial_expression_confidence:.0%}")
         if labels:
             painter.setFont(QFont("Segoe UI", 8))
             fm = painter.fontMetrics()
