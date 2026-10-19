@@ -4,7 +4,9 @@ websockets>=11.0
 pydantic>=2.0.0
 sqlalchemy>=2.0.0
 opencv-python-headless>=4.8.0
-mediapipe>=1.0.0
-numpy>=1.24.0
+# MediaPipe has not released a 1.x package.  The application uses the
+# MediaPipe Tasks API supplied by the supported 0.10 series.
+mediapipe>=0.10.14,<0.11
+numpy>=1.24.0,<2.0
 aiofiles>=23.0.0
 python-multipart>=0.0.6

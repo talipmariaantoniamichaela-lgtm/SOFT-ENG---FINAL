@@ -23,16 +23,33 @@ A production-grade, real-time computer vision web application for face tracking,
 
 ## 🚀 Running the System
 
-Both servers are currently running on your machine:
+The web app uses a Vite frontend and a FastAPI backend:
 - **Web App (Frontend)**: [http://localhost:5173](http://localhost:5173)
 - **API & WebSocket (Backend)**: [http://localhost:8080](http://localhost:8080)
-- **API Documentation (Swagger UI)**: [http://localhost:8080/docs](http://localhost:8080/docs)
+- **API Documentation (Swagger UI)**: [http://localhost:8080/api/docs](http://localhost:8080/api/docs)
+
+### First-time setup
+
+Install Python dependencies and frontend packages from the `vision-ai` directory:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r backend/requirements.txt
+cd frontend && npm ci && cd ..
+```
 
 ### Quick Start Scripts
 
 To start both servers anytime:
 ```powershell
-# From the root directory:
+# macOS/Linux, from the vision-ai directory (after activating .venv):
+./scripts/start.sh
+```
+
+```powershell
+# Windows PowerShell, from the vision-ai directory:
 .\scripts\start.ps1
 ```
 or on Windows Command Prompt:

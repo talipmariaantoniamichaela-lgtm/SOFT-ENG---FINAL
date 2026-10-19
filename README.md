@@ -2,7 +2,7 @@
 
 **Subtitle:** Real-time Motion Detection & Pose Tracking  
 **Theme:** Modern dark interface with electric-blue accents  
-**Target Platform:** Windows desktop (Python 3.11+, PySide6, MediaPipe Tasks Vision, OpenCV)
+**Target Platform:** macOS, Windows, or Linux desktop (Python 3.9+, PySide6, MediaPipe Tasks Vision, OpenCV)
 
 ---
 
@@ -186,10 +186,13 @@ Up to 5 people are tracked at once, each with their own ID, skeleton color and a
 - Integrated webcam or USB camera (optional for live mode; video upload mode works without a webcam)
 
 ### Install Dependencies
-Open Windows PowerShell in `C:\soft eng` and run:
+From the project root, create an isolated environment and install the dependencies:
 
-```powershell
-pip install -r requirements.txt
+```bash
+python3 -m venv .venv
+source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
 ---
@@ -197,9 +200,9 @@ pip install -r requirements.txt
 ## 6. Running the Application
 
 ### Default Launch
-Launch Motion Reader with:
+Launch Motion Reader with the same activated environment:
 
-```powershell
+```bash
 python main.py
 ```
 
